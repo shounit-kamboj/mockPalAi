@@ -2,6 +2,7 @@ from openai import OpenAI
 from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -29,6 +30,11 @@ def load_and_chunk_pdf(file_path: str):
 def embed_text(texts: list[str]) -> list[list[float]]:
     response = client.embeddings.create(model=EMBED_MODEL, input=texts)
     return [item.embedding for item in response.data]
+
+#reads json question bank
+def read_questions_json(file_path: str) -> list[dict]:
+    with open(file_path, "r",encoding="utf-8") as f:
+        return json.load(f)
 
 
 

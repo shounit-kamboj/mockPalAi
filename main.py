@@ -57,7 +57,7 @@ async def rag_ingest_pdf(ctx: inngest.Context):
     trigger = inngest.TriggerEvent(event = "rag/query_pdf_ai")
 )
 async def rag_query_pdf_ai(ctx: inngest.Context):
-    def _search(question: str, top_k: int = 5):
+    def _search(question: str, top_k: int = 30):
         query_vector = embed_text([question])[0]
         store = QdrantStorage()
         found = store.search(query_vector, top_k)

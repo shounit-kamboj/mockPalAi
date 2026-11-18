@@ -12,4 +12,6 @@ wheels/
 .env
 uploads/
 
+.DS_Store
+./idea
 qdrant_storage/
