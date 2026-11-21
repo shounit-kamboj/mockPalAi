@@ -152,7 +152,7 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
         "llm-answer",
         adapter=adapter,
         body={
-            "max_tokens": 5000,
+            "max_tokens": 10000,
             "temperature": 0.2,
             "messages": [
                 {"role": "system", "content": "You are an interviewer who only asks questions based on the context provided."},
@@ -207,6 +207,7 @@ async def rag_interview(ctx: inngest.Context):
         "BANK QUESTIONS (id in brackets):\n"
         f"{bank_block}\n\n"
         "For each bank question, write one interview question tailored to this candidate's "
+        "Keep each question to one or two sentences (under 40 words)."
         "resume and this role. Keep each id exactly as given. Return JSON only, in this shape:\n"
         '{"questions": [{"source_id": "<id>", "question": "<tailored question>"}]}'
     )
@@ -216,7 +217,7 @@ async def rag_interview(ctx: inngest.Context):
         "write_interview",
         adapter=adapter,
         body={
-            "max_tokens": 1500,
+            "max_tokens": 8000,
             "temperature": 0.4,
             "response_format": {"type": "json_object"},
             "messages": [
@@ -227,6 +228,7 @@ async def rag_interview(ctx: inngest.Context):
                         "Base every question on one of the provided bank questions. "
                         "Tailor it to the candidate's resume and the role, ask one clear thing at a time, "
                         "and never invent details that are not in the resume."
+                        "if the question doesnt refrence a sentence from the resume then dont ask it."
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -239,8 +241,7 @@ async def rag_interview(ctx: inngest.Context):
 
     # grounding check: drop anything not based on a retrieved question
     retrieved_ids = {q.id for q in found.questions}
-    grounded = [q for q in interview.questions if q.source_id in retrieved_ids]
-
+    grounded = [q for q in interview.questions if q.source_id.strip("[] ") in retrieved_ids]
     return {
         "questions": [q.model_dump() for q in grounded],
         "dropped": len(interview.questions) - len(grounded),

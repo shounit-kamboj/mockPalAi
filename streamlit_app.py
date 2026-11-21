@@ -101,31 +101,19 @@ st.caption("Upload your resume and paste a job description to get a tailored moc
 # A form groups the inputs so the script only acts when the button is pressed,
 # instead of on every keystroke/upload.
 with st.form("interview_form"):
-    # TODO: resume = st.file_uploader(...)   PDF only, one file (see the old uploader for the arguments)
-    # TODO: jd_text = st.text_area(...)      label like "Job description", give it some height
-    # TODO: submitted = st.form_submit_button("Start interview")
-
     resume = st.file_uploader("Upload your resume", accept_multiple_files=False, type="pdf")
     jd_text = st.text_area("Paste your job description", height=200)
     submitted = st.form_submit_button("Start interview")
 
-
-# TODO: if submitted:
-#           - if no resume or jd_text.strip() is empty -> st.error("...") and st.stop()
-#           - path = save_uploaded_pdf(resume)
-#           - event_id = run_async(send_interview_start_event(path, jd_text.strip()))
-#           - st.success(...) showing the event id
-
-    if submitted:
-        if not resume or not jd_text.strip():
-            st.error("Please upload a resume and paste a job description.")
-            st.stop()
+if submitted:
+    if not resume or not jd_text.strip():
+        st.error("Please upload a resume and paste a job description.")
+        st.stop()
     path = save_uploaded_pdf(resume)
     event_id = run_async(send_interview_start_event(path, jd_text.strip()))
     with st.spinner("Writing your interview..."):
         output = wait_for_run_output(event_id)
 
-    st.write(output)
     questions = output.get("questions", [])
     if not questions:
         st.warning("No questions came back. Check the run at localhost:8288.")
