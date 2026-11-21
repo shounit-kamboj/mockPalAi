@@ -207,8 +207,8 @@ async def rag_interview(ctx: inngest.Context):
         "BANK QUESTIONS (id in brackets):\n"
         f"{bank_block}\n\n"
         "For each bank question, write one interview question tailored to this candidate's "
-        "Keep each question to one or two sentences (under 40 words)."
-        "resume and this role. Keep each id exactly as given. Return JSON only, in this shape:\n"
+        "resume and this role. Keep each question to one or two sentences (under 40 words). "
+        "Keep each id exactly as given. Return JSON only, in this shape:\n"
         '{"questions": [{"source_id": "<id>", "question": "<tailored question>"}]}'
     )
 
@@ -217,7 +217,7 @@ async def rag_interview(ctx: inngest.Context):
         "write_interview",
         adapter=adapter,
         body={
-            "max_tokens": 8000,
+            "max_tokens": 13000,
             "temperature": 0.4,
             "response_format": {"type": "json_object"},
             "messages": [
