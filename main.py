@@ -227,8 +227,8 @@ async def rag_interview(ctx: inngest.Context):
                         "You are an experienced hiring manager running a mock interview. "
                         "Base every question on one of the provided bank questions. "
                         "Tailor it to the candidate's resume and the role, ask one clear thing at a time, "
-                        "and never invent details that are not in the resume."
-                        "if the question doesnt refrence a sentence from the resume then dont ask it."
+                        "and never invent details that are not in the resume. "
+                        "Where it fits, connect the question to a specific project or experience from the resume."
                     ),
                 },
                 {"role": "user", "content": user_content},
