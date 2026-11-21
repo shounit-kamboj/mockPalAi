@@ -31,6 +31,26 @@ class RagQuestion(pydantic.BaseModel):
 class RagQuestions(pydantic.BaseModel):
     questions: list[RagQuestion]
 
+class ResumeChunks(pydantic.BaseModel):
+    chunks: list[str]      # small pieces, one search each (step 4)
+    full_text: str         # whole resume, goes in the LLM prompt (step 5)
+
+
+class RetrievedQuestion(RagQuestion):   # inherits all 10 question fields
+    score: float                        # cosine similarity from Qdrant, higher = closer match
+
+
+class RetrievedQuestions(pydantic.BaseModel):
+    questions: list[RetrievedQuestion]
+
+class InterviewQuestion(pydantic.BaseModel):
+    source_id: str      # id of the bank question it was based on
+    question: str       # the tailored question
+
+
+class Interview(pydantic.BaseModel):
+    questions: list[InterviewQuestion]
+
 
 
 

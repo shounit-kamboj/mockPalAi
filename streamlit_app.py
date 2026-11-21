@@ -1,24 +1,30 @@
 import asyncio
-from pathlib import Path
-import time
-
-import streamlit as st
-import inngest
-from dotenv import load_dotenv
 import os
+import time
+from pathlib import Path
+
+import inngest
 import requests
+import streamlit as st
+from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="RAG Ingest PDF", page_icon="📄", layout="centered")
+st.set_page_config(page_title="MockPal AI", page_icon="🎤", layout="centered")
 
 
+# =====================================================================================
+# KEEP: helpers from the old app (unchanged)
+# =====================================================================================
 @st.cache_resource
 def get_inngest_client() -> inngest.Inngest:
-    return inngest.Inngest(app_id="rag_app", is_production=False)
+    # app_id only labels who SENT the event; the backend's app_id is "rag_mock_interviewer".
+    # Matching them is tidier but not required: events are routed by event NAME.
+    return inngest.Inngest(app_id="rag_mock_interviewer", is_production=False)
 
 
 def get_event_loop() -> asyncio.AbstractEventLoop:
+    # Streamlit reruns this whole script on every click, so keep one event loop in session_state
     if "event_loop" not in st.session_state:
         st.session_state.event_loop = asyncio.new_event_loop()
     return st.session_state.event_loop
@@ -30,73 +36,28 @@ def run_async(coro):
 
 
 def save_uploaded_pdf(file) -> Path:
+    # Same as before: the backend reads the resume from disk, so we pass a PATH in the event,
+    # never the file contents (Inngest events have a size limit).
     uploads_dir = Path("uploads")
     uploads_dir.mkdir(parents=True, exist_ok=True)
     file_path = uploads_dir / file.name
-    file_bytes = file.getbuffer()
-    file_path.write_bytes(file_bytes)
+    file_path.write_bytes(file.getbuffer())
     return file_path
 
 
-async def send_rag_ingest_event(pdf_path: Path) -> None:
-    client = get_inngest_client()
-    await client.send(
-        inngest.Event(
-            name="rag/pdf_ingest",
-            data={
-                "pdf_path": str(pdf_path.resolve()),
-                "source_id": pdf_path.name,
-            },
-        )
-    )
-
-
-st.title("Upload a PDF to Ingest")
-uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
-
-if uploaded is not None:
-    with st.spinner("Uploading and triggering ingestion..."):
-        path = save_uploaded_pdf(uploaded)
-        # Kick off the event and block until the send completes
-        run_async(send_rag_ingest_event(path))
-        # Small pause for user feedback continuity
-        time.sleep(0.3)
-    st.success(f"Triggered ingestion for: {path.name}")
-    st.caption("You can upload another PDF if you like.")
-
-st.divider()
-st.title("Ask a question about your PDFs")
-
-
-async def send_rag_query_event(question: str, top_k: int) -> None:
-    client = get_inngest_client()
-    result = await client.send(
-        inngest.Event(
-            name="rag/query_pdf_ai",
-            data={
-                "question": question,
-                "top_k": top_k,
-            },
-        )
-    )
-
-    return result[0]
-
-
 def _inngest_api_base() -> str:
-    # Local dev server default; configurable via env
     return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
 
 
 def fetch_runs(event_id: str) -> list[dict]:
-    url = f"{_inngest_api_base()}/events/{event_id}/runs"
-    resp = requests.get(url)
+    resp = requests.get(f"{_inngest_api_base()}/events/{event_id}/runs")
     resp.raise_for_status()
-    data = resp.json()
-    return data.get("data", [])
+    return resp.json().get("data", [])
 
 
 def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s: float = 0.5) -> dict:
+    # Asks the Inngest dev server "is the run for this event finished?" every 0.5s.
+    # Not needed until step 5 (there's no backend function for the new event yet).
     start = time.time()
     last_status = None
     while True:
@@ -114,23 +75,61 @@ def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s
         time.sleep(poll_interval_s)
 
 
-with st.form("rag_query_form"):
-    question = st.text_input("Your question")
-    top_k = st.number_input("How many chunks to retrieve", min_value=1, max_value=20, value=5, step=1)
-    submitted = st.form_submit_button("Ask")
+# =====================================================================================
+# NEW: send the interview event (modelled on the old send_rag_query_event)
+# =====================================================================================
+async def send_interview_start_event(resume_path: Path, jd_text: str) -> str:
+    client = get_inngest_client()
+    result = await client.send(
+              inngest.Event(
+                  name="rag/interview_start",     # the backend function in step 4 listens for this name
+                  data={
+                      "resume_path": str(resume_path.resolve()),
+                      "jd_text": jd_text,
+                  },
+              )
+          )
+    return result[0]
 
-    if submitted and question.strip():
-        with st.spinner("Sending event and generating answer..."):
-            # Fire-and-forget event to Inngest for observability/workflow
-            event_id = run_async(send_rag_query_event(question.strip(), int(top_k)))
-            # Poll the local Inngest API for the run's output
-            output = wait_for_run_output(event_id)
-            answer = output.get("answer", "")
-            sources = output.get("sources", [])
 
-        st.subheader("Answer")
-        st.write(answer or "(No answer)")
-        if sources:
-            st.caption("Sources")
-            for s in sources:
-                st.write(f"- {s}")
+# =====================================================================================
+# NEW: the page
+# =====================================================================================
+st.title("MockPal AI")
+st.caption("Upload your resume and paste a job description to get a tailored mock interview.")
+
+# A form groups the inputs so the script only acts when the button is pressed,
+# instead of on every keystroke/upload.
+with st.form("interview_form"):
+    # TODO: resume = st.file_uploader(...)   PDF only, one file (see the old uploader for the arguments)
+    # TODO: jd_text = st.text_area(...)      label like "Job description", give it some height
+    # TODO: submitted = st.form_submit_button("Start interview")
+
+    resume = st.file_uploader("Upload your resume", accept_multiple_files=False, type="pdf")
+    jd_text = st.text_area("Paste your job description", height=200)
+    submitted = st.form_submit_button("Start interview")
+
+
+# TODO: if submitted:
+#           - if no resume or jd_text.strip() is empty -> st.error("...") and st.stop()
+#           - path = save_uploaded_pdf(resume)
+#           - event_id = run_async(send_interview_start_event(path, jd_text.strip()))
+#           - st.success(...) showing the event id
+
+    if submitted:
+        if not resume or not jd_text.strip():
+            st.error("Please upload a resume and paste a job description.")
+            st.stop()
+    path = save_uploaded_pdf(resume)
+    event_id = run_async(send_interview_start_event(path, jd_text.strip()))
+    with st.spinner("Writing your interview..."):
+        output = wait_for_run_output(event_id)
+
+    st.write(output)
+    questions = output.get("questions", [])
+    if not questions:
+        st.warning("No questions came back. Check the run at localhost:8288.")
+    else:
+        st.subheader("Your interview")
+        for i, q in enumerate(questions, start=1):
+            st.markdown(f"**{i}.** {q['question']}")

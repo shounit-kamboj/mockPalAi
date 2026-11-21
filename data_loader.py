@@ -14,6 +14,7 @@ EMBED_MODEL = "text-embedding-3-large"
 EMBED_DIM = 3072
 
 splitter = SentenceSplitter(chunk_size=512, chunk_overlap=75)
+resume_splitter = SentenceSplitter(chunk_size=120, chunk_overlap=20)
 
 def load_and_chunk_pdf(file_path: str):
     docs = PDFReader().load_data(file = file_path)
@@ -35,6 +36,14 @@ def embed_text(texts: list[str]) -> list[list[float]]:
 def read_questions_json(file_path: str) -> list[dict]:
     with open(file_path, "r",encoding="utf-8") as f:
         return json.load(f)
+
+def read_pdf_text(file_path: str) -> str:
+    docs = PDFReader().load_data(file = file_path)
+    texts = [doc.text for doc in docs if getattr(doc, "text", None)]
+    return "\n".join(texts)
+
+def chunk_resume(text: str) -> list[str]:
+    return resume_splitter.split_text(text) #chunks in size specified in resume_splitter
 
 
 

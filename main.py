@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-
+import json
 import inngest
 import inngest.fast_api
 from dotenv import load_dotenv
@@ -11,14 +11,15 @@ from inngest.experimental import ai
 # Removed unused imports: aiohttp.payload, openai...message, requests.adapters, datetime.
 # They were never used, and aiohttp/requests aren't in pyproject.toml.
 
-from data_loader import load_and_chunk_pdf, embed_text, read_questions_json
+from data_loader import load_and_chunk_pdf, embed_text, read_questions_json, read_pdf_text, chunk_resume
 from vector_db import QdrantStorage
 from custom_types import (
     RAGUpsertResult,
     RAGSearchResult,
     RAGChunkAndSrc,
     RagQuestion,
-    RagQuestions,
+    RagQuestions, ResumeChunks,
+    RetrievedQuestions, InterviewQuestion,Interview
 )
 
 load_dotenv()
@@ -35,6 +36,8 @@ inngest_client = inngest.Inngest(
 # (4,055 questions / 200 = ~21 steps).
 BATCH_SIZE = 200
 QUESTIONS_COLLECTION = "questions"
+TOP_K_PER_SEARCH = 10
+FINAL_QUESTIONS = 30
 
 
 # =====================================================================================
@@ -65,7 +68,6 @@ async def rag_ingest_questions(ctx: inngest.Context):
         payloads = [q.model_dump() for q in batch]
         QdrantStorage(collection=QUESTIONS_COLLECTION).upsert(ids, vectors, payloads)
         return RAGUpsertResult(ingested=len(batch))
-
 
     # Step 1: load + validate the file (one checkpoint)
     bank = await ctx.step.run("load_questions", lambda: _load(ctx), output_type=RagQuestions)
@@ -150,7 +152,7 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
         "llm-answer",
         adapter=adapter,
         body={
-            "max_tokens": 1024,
+            "max_tokens": 5000,
             "temperature": 0.2,
             "messages": [
                 {"role": "system", "content": "You are an interviewer who only asks questions based on the context provided."},
@@ -162,9 +164,90 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
     answer = response["choices"][0]["message"]["content"].strip()
     return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
 
+@inngest_client.create_function(
+    fn_id="RAG: interview",
+    trigger=inngest.TriggerEvent(event="rag/interview_start"),
+)
+async def rag_interview(ctx: inngest.Context):
+    def _load(ctx) -> ResumeChunks:
+        # TODO: the resume's chunks and its full text
+        resume_path = ctx.event.data["resume_path"]
+        text = read_pdf_text(resume_path)
+        chunks = chunk_resume(text)
+        return ResumeChunks(chunks=chunks, full_text=text)
+
+    def _retrieve(chunks: list[str], jd_text: str) -> RetrievedQuestions:
+        store = QdrantStorage(collection=QUESTIONS_COLLECTION)
+        texts = chunks + [jd_text]
+        vectors = embed_text(texts)
+
+        best = {}
+        for vec in vectors:
+            for hit in store.search_questions(vec, top_k=TOP_K_PER_SEARCH):
+                qid = hit["id"]
+                if qid not in best or hit["score"] > best[qid]["score"]:
+                    best[qid] = hit
+
+        top = sorted(best.values(), key=lambda h: h["score"], reverse=True)[:FINAL_QUESTIONS]
+        return RetrievedQuestions(questions=top)
+
+
+    resume = await ctx.step.run("load_resume", lambda: _load(ctx), output_type=ResumeChunks)
+    jd_text = ctx.event.data["jd_text"]
+    found = await ctx.step.run("retrieve", lambda: _retrieve(resume.chunks, jd_text),
+                               output_type=RetrievedQuestions)
+
+    # ---- step 5: write the interview from the retrieved questions ----
+    bank_block = "\n".join(f"[{q.id}] {q.question}" for q in found.questions)
+    user_content = (
+        "JOB DESCRIPTION:\n"
+        f"{jd_text}\n\n"
+        "CANDIDATE RESUME:\n"
+        f"{resume.full_text}\n\n"
+        "BANK QUESTIONS (id in brackets):\n"
+        f"{bank_block}\n\n"
+        "For each bank question, write one interview question tailored to this candidate's "
+        "resume and this role. Keep each id exactly as given. Return JSON only, in this shape:\n"
+        '{"questions": [{"source_id": "<id>", "question": "<tailored question>"}]}'
+    )
+
+    adapter = ai.openai.Adapter(auth_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
+    response = await ctx.step.ai.infer(
+        "write_interview",
+        adapter=adapter,
+        body={
+            "max_tokens": 1500,
+            "temperature": 0.4,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an experienced hiring manager running a mock interview. "
+                        "Base every question on one of the provided bank questions. "
+                        "Tailor it to the candidate's resume and the role, ask one clear thing at a time, "
+                        "and never invent details that are not in the resume."
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ],
+        },
+    )
+
+    content = response["choices"][0]["message"]["content"]
+    interview = Interview.model_validate(json.loads(content))
+
+    # grounding check: drop anything not based on a retrieved question
+    retrieved_ids = {q.id for q in found.questions}
+    grounded = [q for q in interview.questions if q.source_id in retrieved_ids]
+
+    return {
+        "questions": [q.model_dump() for q in grounded],
+        "dropped": len(interview.questions) - len(grounded),
+    }
 
 app = FastAPI()
 
 # Every function must be listed here or Inngest won't see it.
 # After editing: restart uvicorn, then check the dashboard lists "RAG: ingest questions".
-inngest.fast_api.serve(app, inngest_client, [rag_ingest_questions, rag_ingest_pdf, rag_query_pdf_ai])
+inngest.fast_api.serve(app, inngest_client, [rag_ingest_questions, rag_ingest_pdf, rag_query_pdf_ai,rag_interview])
